@@ -3,7 +3,7 @@
   "version": "2.0.0",
   "description": "Find and delete the junk that piles up on Windows Server — packaged as a single .exe",
   "private": true,
-  "license": "UNLICENSED",
+  "license": "MIT",
   "engines": {
     "node": ">=22"
   },
