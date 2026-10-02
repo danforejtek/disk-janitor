@@ -1,0 +1,723 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>disk-janitor</title>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --text: #1b1f24; --muted: #5d6673; --line: #e2e5ea; --accent: #2563eb; --accent-soft: #dbe7ff;
+  --ok: #15803d; --warn: #b45309; --bad: #b91c1c; --ok-soft: #dcfce7; --warn-soft: #fef3c7; --bad-soft: #fee2e2;
+  --c1: #2563eb; --c2: #0891b2; --c3: #7c3aed; --c4: #db2777; --c5: #ea580c; --c6: #65a30d; --c7: #0d9488; --c8: #9333ea;
+  --hidden: #64748b; --unacc: #f59e0b; --hover: rgba(37, 99, 235, .05); --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1216; --panel: #171b21; --text: #e6e9ee; --muted: #98a2b0; --line: #2a3039; --accent: #60a5fa; --accent-soft: #1e3a5f;
+    --ok: #4ade80; --warn: #fbbf24; --bad: #f87171; --ok-soft: #13301f; --warn-soft: #3a2c0b; --bad-soft: #3b1515; --hidden: #94a3b8; --hover: rgba(96, 165, 250, .07);
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1216; --panel: #171b21; --text: #e6e9ee; --muted: #98a2b0; --line: #2a3039; --accent: #60a5fa; --accent-soft: #1e3a5f;
+  --ok: #4ade80; --warn: #fbbf24; --bad: #f87171; --ok-soft: #13301f; --warn-soft: #3a2c0b; --bad-soft: #3b1515; --hidden: #94a3b8; --hover: rgba(96, 165, 250, .07);
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 "Segoe UI", system-ui, sans-serif; }
+header { display: flex; align-items: center; gap: 16px; padding: 10px 20px; background: var(--panel); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5; flex-wrap: wrap; }
+header h1 { font-size: 16px; margin: 0; }
+header .host { color: var(--muted); font-size: 12px; }
+nav { display: flex; gap: 4px; flex-wrap: wrap; }
+nav button { background: none; border: 0; padding: 6px 12px; border-radius: 6px; color: var(--muted); font: inherit; cursor: pointer; }
+nav button.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.spacer { flex: 1; }
+#job { display: flex; align-items: center; gap: 8px; color: var(--muted); max-width: 420px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 13px; }
+#job.busy::before, .spin::before { content: ""; width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--accent); border-right-color: transparent; animation: spin .8s linear infinite; flex: none; display: inline-block; }
+@keyframes spin { to { transform: rotate(360deg); } }
+main { padding: 24px 20px; max-width: 1400px; margin: 0 auto; }
+section { display: none; }
+section.active { display: block; }
+
+/* titles */
+.page-head { margin: 0 0 20px; }
+.page-head h2 { font-size: 24px; line-height: 1.25; margin: 0 0 6px; font-weight: 700; letter-spacing: -.015em; }
+.page-head p { margin: 0; color: var(--muted); font-size: 15px; max-width: 860px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 18px; margin-bottom: 16px; }
+.card h3 { font-size: 17px; line-height: 1.3; margin: 0; font-weight: 650; }
+.card .sub { color: var(--muted); margin: 4px 0 14px; font-size: 13px; max-width: 780px; }
+.card-head { display: flex; gap: 12px; align-items: flex-start; flex-wrap: wrap; }
+.card-head > :first-child { flex: 1; min-width: 240px; }
+.card-head .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+.banner { background: var(--warn-soft); color: var(--warn); border-radius: 8px; padding: 10px 14px; margin-bottom: 16px; }
+.banner code { color: inherit; }
+button.btn { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 6px 12px; font: inherit; cursor: pointer; }
+button.btn:hover:not(:disabled) { border-color: var(--accent); }
+button.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.btn.danger { background: var(--bad); border-color: var(--bad); color: #fff; }
+button.btn.small { padding: 3px 10px; font-size: 12px; }
+button.btn:disabled { opacity: .5; cursor: default; }
+button.link { background: none; border: 0; color: var(--accent); cursor: pointer; font: inherit; padding: 0; text-align: left; }
+
+/* job card */
+.jobcard { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.jobcard h3 { display: flex; align-items: center; gap: 10px; }
+.pbar { height: 12px; border-radius: 6px; background: var(--line); overflow: hidden; margin: 2px 0 10px; position: relative; }
+.pbar > div { height: 100%; background: var(--accent); border-radius: 6px; transition: width .4s; }
+.pbar.indet > div { width: 30% !important; position: absolute; animation: slide 1.4s ease-in-out infinite; }
+@keyframes slide { from { left: -30%; } to { left: 100%; } }
+.jcstats { display: flex; gap: 8px 22px; flex-wrap: wrap; color: var(--muted); font-size: 13px; }
+.jcstats b { color: var(--text); font-weight: 600; }
+#jcStep { font-family: var(--mono); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+
+.drives { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+.drive { border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+.drive .name { font-weight: 600; font-size: 16px; }
+.bar { height: 10px; border-radius: 5px; background: var(--line); overflow: hidden; display: flex; margin: 8px 0; }
+.bar > div { height: 100%; }
+.stack { height: 28px; border-radius: 6px; }
+.legend { display: flex; gap: 16px; flex-wrap: wrap; color: var(--muted); }
+.legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; background: var(--sw); vertical-align: -1px; }
+.big { font-size: 22px; font-weight: 600; }
+.muted { color: var(--muted); }
+.small { font-size: 12px; }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-weight: 600; color: var(--muted); font-size: 12px; }
+td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+td.path { font-family: var(--mono); font-size: 12px; word-break: break-all; }
+.pill { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; white-space: nowrap; }
+.pill.safe { background: var(--ok-soft); color: var(--ok); }
+.pill.moderate { background: var(--warn-soft); color: var(--warn); }
+.pill.caution { background: var(--bad-soft); color: var(--bad); }
+.pill.info { background: var(--line); color: var(--muted); }
+.notes { color: var(--muted); font-size: 12px; margin: 4px 0 0; padding-left: 16px; }
+.mini { display: inline-block; width: 80px; height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; vertical-align: middle; margin-right: 6px; }
+.mini > div { height: 100%; background: var(--accent); }
+
+/* collapsible rows */
+.tw { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; margin-right: 4px; border: 0; background: none; color: var(--muted); cursor: pointer; padding: 0; font-size: 11px; border-radius: 4px; vertical-align: 1px; flex: none; transition: transform .15s; }
+.tw:hover { background: var(--line); color: var(--text); }
+.tw[aria-expanded="true"] { transform: rotate(90deg); }
+span.tw { cursor: default; }
+span.tw:hover { background: none; }
+tr.grp { cursor: pointer; }
+tr.grp:hover td { background: var(--hover); }
+tr.lvl1 td, tr.lvl2 td, tr.lvl3 td { color: var(--muted); }
+tr.lvl1 td:first-child, tr.lvl2 td:first-child, tr.lvl3 td:first-child { color: var(--text); }
+tr.child td { border-bottom-style: dashed; }
+.cell { display: flex; align-items: flex-start; gap: 2px; }
+.cell > div { min-width: 0; }
+
+.crumbs { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; font-family: var(--mono); font-size: 12px; margin-bottom: 10px; }
+.crumbs button { background: none; border: 0; color: var(--accent); cursor: pointer; font: inherit; padding: 0; }
+#treemap { position: relative; height: 420px; border-radius: 8px; overflow: hidden; background: var(--line); }
+#treemap .tile { position: absolute; border: 1px solid var(--panel); color: #fff; padding: 4px 6px; overflow: hidden; font-size: 12px; cursor: pointer; line-height: 1.3; }
+#treemap .tile:hover { filter: brightness(1.12); }
+#treemap .tile b { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#treemap .tile.files { background: var(--hidden) !important; cursor: default; }
+#treemap .tile.unread { background: repeating-linear-gradient(45deg, var(--hidden), var(--hidden) 6px, #475569 6px, #475569 12px) !important; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 900px) { .grid2 { grid-template-columns: 1fr; } }
+.stats { display: flex; gap: 28px; flex-wrap: wrap; margin-bottom: 12px; }
+.stats div .muted { font-size: 12px; }
+#log { font-family: var(--mono); font-size: 12px; white-space: pre-wrap; max-height: 70vh; overflow: auto; margin: 0; }
+#log .warn { color: var(--warn); }
+#log .debug { color: var(--muted); }
+.toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+dialog { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--text); max-width: 560px; }
+dialog::backdrop { background: rgba(0,0,0,.4); }
+.empty { color: var(--muted); padding: 28px 24px; text-align: center; }
+.empty b { color: var(--text); }
+.empty h3 { color: var(--text); margin-bottom: 6px !important; }
+details summary { cursor: pointer; }
+.nowrap { white-space: nowrap; }
+.risk-legend { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+@media (max-width: 640px) { main { padding: 16px; } header { padding: 10px 16px; } .page-head h2 { font-size: 20px; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>disk-janitor</h1>
+  <span class="host" id="host"></span>
+  <nav id="tabs">
+    <button data-tab="overview" class="active">Overview</button>
+    <button data-tab="explore">Explore</button>
+    <button data-tab="apps">Apps</button>
+    <button data-tab="clean">Clean up</button>
+    <button data-tab="log">Log</button>
+  </nav>
+  <span class="spacer"></span>
+  <span id="job"></span>
+</header>
+<main>
+  <div class="banner" id="elev" hidden><b>Heads up: not running as administrator.</b> Some system folders and other users' profiles can't be read, so the numbers will be partial, and admin-only categories can't be cleaned. Close this and start disk-janitor again by double-clicking it (it will ask for admin rights), or run <code>disk-janitor ui</code> from an <b>Administrator</b> prompt.</div>
+
+  <div class="card jobcard" id="jobCard" hidden>
+    <div class="card-head">
+      <div><h3><span class="spin"></span><span id="jcTitle"></span></h3><p class="sub" id="jcSub"></p></div>
+      <div class="actions"><button class="btn" id="cancel">Cancel</button></div>
+    </div>
+    <div class="pbar" id="jcBarWrap"><div id="jcBar"></div></div>
+    <div class="jcstats"><span id="jcCount"></span><span id="jcTime"></span></div>
+    <div class="jcstats" style="margin-top:4px"><span id="jcStep"></span></div>
+  </div>
+
+  <section id="overview" class="active">
+    <div class="page-head">
+      <h2>Where did my disk space go?</h2>
+      <p>Pick a drive and disk-janitor walks through every folder on it, adds it all up and shows you what's eating the space, including the hidden bits Explorer never shows. It only looks; nothing gets changed.</p>
+    </div>
+    <div class="card"><h3>Drives</h3><p class="sub">How full each drive is right now.</p><div class="drives" id="drives"></div></div>
+    <div id="explain"><div class="card empty"><h3>No analysis yet</h3>Hit <b>Where did the space go?</b> on one of the drives above. A system drive usually takes a minute or two.</div></div>
+  </section>
+
+  <section id="explore">
+    <div class="page-head">
+      <h2>Explore</h2>
+      <p>Each box is a folder, sized by how much space it takes. Click a box to step inside, and use the path above it to step back out.</p>
+    </div>
+    <div class="card">
+      <div class="crumbs" id="crumbs"></div>
+      <div id="treemap"><div class="empty">Nothing to explore yet. Analyze a drive on the <b>Overview</b> tab first.</div></div>
+    </div>
+    <div class="grid2">
+      <div class="card">
+        <div class="card-head"><div><h3>Folders in here</h3><p class="sub">Biggest first. Click ▸ to peek inside without leaving this spot, or click the name to jump in.</p></div>
+          <div class="actions"><button class="btn small" id="dirsCollapse">Collapse all</button></div></div>
+        <table id="dirs"></table>
+      </div>
+      <div class="card">
+        <h3>Biggest files in here</h3>
+        <p class="sub">Tick files to delete them. They're gone for good (no recycle bin), system folders are always refused, and every delete goes into the log.</p>
+        <div class="toolbar"><button class="btn danger" id="delFiles" disabled>Delete selected</button></div>
+        <table id="files"></table>
+      </div>
+    </div>
+  </section>
+
+  <section id="apps">
+    <div class="page-head">
+      <h2>Apps vs. the space they really use</h2>
+      <p>Settings › Apps only shows the size each installer <i>says</i> it uses, and plenty of them don't say anything. Here we measured the actual folders and matched them back to the installed apps.</p>
+    </div>
+    <div id="appsBody"><div class="card empty"><h3>Nothing here yet</h3>Analyze the system drive on the <b>Overview</b> tab first. The app comparison comes with it.</div></div>
+  </section>
+
+  <section id="clean">
+    <div class="page-head">
+      <h2>Clean up</h2>
+      <p>Scan first to see how much each category could free. Nothing is deleted until you pick categories and confirm. <b>Dry run</b> shows exactly what would go, without touching anything.</p>
+    </div>
+    <div class="card">
+      <div class="toolbar">
+        <button class="btn primary" id="scanBtn">Scan</button>
+        <label><input type="checkbox" id="deep"> include the slow one (Windows component store, DISM)</label>
+        <span class="spacer"></span>
+        <button class="btn" id="selSafe" disabled>Select safe</button>
+        <button class="btn" id="dryBtn" disabled>Dry run</button>
+        <button class="btn danger" id="cleanBtn" disabled>Clean selected…</button>
+      </div>
+      <div id="scanBody" class="empty"><h3>Not scanned yet</h3>Hit <b>Scan</b> to see what can be cleaned. Scanning only looks; nothing is deleted.</div>
+    </div>
+    <div class="card" id="resultCard" hidden><h3 id="resultTitle">Result</h3><p class="sub" id="resultSub"></p><div id="resultBody"></div></div>
+  </section>
+
+  <section id="log">
+    <div class="page-head">
+      <h2>Activity log</h2>
+      <p>Everything disk-janitor does, as it happens. Cleanups and deletes are also saved to a file under <code>%ProgramData%\disk-janitor\logs</code>.</p>
+    </div>
+    <div class="card"><div class="toolbar"><span class="muted" id="logFile"></span><span class="spacer"></span><button class="btn" id="clearLog">Clear</button></div><pre id="log"></pre></div>
+  </section>
+</main>
+
+<dialog id="confirm"><h3 id="cTitle"></h3><div id="cBody"></div><div class="toolbar" style="justify-content:flex-end;margin-top:16px"><button class="btn" value="no" id="cNo">Cancel</button><button class="btn danger" id="cYes">Delete</button></div></dialog>
+
+<script>
+'use strict';
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+function fmt(n) {
+  if (!Number.isFinite(n) || n <= 0) return '0 B';
+  if (n < 1024) return n + ' B';
+  const u = ['KB', 'MB', 'GB', 'TB']; let i = -1;
+  do { n /= 1024; i++; } while (n >= 1024 && i < u.length - 1);
+  return n.toFixed(n >= 100 ? 0 : n >= 10 ? 1 : 2) + ' ' + u[i];
+}
+const num = (n) => Number(n || 0).toLocaleString('en-US');
+const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0) + '%';
+const date = (ms) => (ms ? new Date(ms).toLocaleDateString('sv-SE') : '');
+const COLORS = ['--c1', '--c2', '--c3', '--c4', '--c5', '--c6', '--c7', '--c8'].map((v) => `var(${v})`);
+const caret = (open, attrs = '') => `<button class="tw" aria-expanded="${open}" ${attrs} title="${open ? 'Collapse' : 'Expand'}">▶</button>`;
+const noCaret = '<span class="tw"></span>';
+
+async function api(path, body) {
+  const r = await fetch(path, body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+  return j;
+}
+function toast(msg, bad) { logLines([{ line: msg, level: bad ? 'warn' : 'info' }]); if (bad) alert(msg); }
+
+const state = {
+  info: null, job: null, prog: null, explainId: null, explain: null, scanId: null, scan: null, treePath: null, tree: null,
+  openBuckets: new Set(), dirOpen: new Set(), dirKids: new Map(), appOpen: new Set(),
+};
+
+// ── tabs ──
+document.querySelectorAll('#tabs button').forEach((b) => b.addEventListener('click', () => showTab(b.dataset.tab)));
+function showTab(t) {
+  document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('active', b.dataset.tab === t));
+  document.querySelectorAll('main > section').forEach((s) => s.classList.toggle('active', s.id === t));
+  try { localStorage.setItem('dj-tab', t); } catch {}
+  // The treemap needs a visible container to measure, so lay it out when its tab opens.
+  if (t === 'explore') { if (state.tree) renderTree(); else if (state.explainId) loadTree(null); }
+}
+
+// ── events ──
+function connect() {
+  const es = new EventSource('/api/events');
+  es.addEventListener('job', (e) => setJob(JSON.parse(e.data)));
+  es.addEventListener('progress', (e) => { const p = JSON.parse(e.data); if (state.job && p.type !== 'done') { state.prog = p; renderJob(); } });
+  es.addEventListener('log', (e) => { const d = JSON.parse(e.data); logLines(d.lines, d.dropped); });
+  es.addEventListener('scan-done', (e) => { const d = JSON.parse(e.data); state.scanId = d.scanId; state.scan = d.scan; renderScan(); });
+  es.addEventListener('clean-done', (e) => renderCleanResult(JSON.parse(e.data)));
+  es.addEventListener('explain-done', (e) => {
+    const d = JSON.parse(e.data);
+    state.explainId = d.explainId; state.explain = d.result; state.tree = null;
+    state.openBuckets = new Set(); state.dirOpen = new Set(); state.dirKids = new Map(); state.appOpen = new Set();
+    renderExplain(); renderApps(); loadTree(null);
+  });
+  es.addEventListener('job-error', (e) => toast(JSON.parse(e.data).message, true));
+  es.onerror = () => { $('#job').textContent = 'disconnected — is disk-janitor still running?'; };
+}
+
+// ── running job (shown on every tab) ──
+let jobTimer = null;
+function jobText(j) {
+  if (j.kind === 'explain') {
+    const drive = j.label.replace(/^analyzing\s*/i, '');
+    return { title: `Analyzing ${drive}`, sub: 'Walking through every folder and adding up what\'s in there. A system drive usually takes a minute or two. Feel free to look around meanwhile.' };
+  }
+  if (j.kind === 'scan') return { title: 'Scanning for things to clean', sub: 'Checking each cleanup category to see how much it could free. This only looks; nothing gets deleted.' };
+  if (/^dry run/i.test(j.label)) return { title: 'Dry run', sub: 'Going through the picked categories and noting what would be deleted. Nothing is actually removed.' };
+  return { title: 'Cleaning up', sub: 'Deleting files in the picked categories. Files that are in use are skipped. Cancel stops after the current file.' };
+}
+function setJob(j) {
+  const wasBusy = !!state.job;
+  state.job = j;
+  if (!j) state.prog = null;
+  $('#job').classList.toggle('busy', !!j);
+  $('#job').textContent = j ? j.label : '';
+  document.querySelectorAll('[data-needs-idle]').forEach((b) => (b.disabled = !!j));
+  $('#scanBtn').disabled = !!j;
+  updateCleanButtons();
+  clearInterval(jobTimer);
+  if (j) { jobTimer = setInterval(renderJob, 1000); renderJob(); }
+  $('#jobCard').hidden = !j;
+  if (!j && wasBusy) loadDrives();
+}
+function renderJob() {
+  const j = state.job; if (!j) return;
+  const t = jobText(j); const p = state.prog;
+  $('#jcTitle').textContent = t.title; $('#jcSub').textContent = t.sub;
+  const s = Math.max(0, Math.round((Date.now() - j.started) / 1000));
+  $('#jcTime').innerHTML = `<b>${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}</b> elapsed`;
+  const wrap = $('#jcBarWrap');
+  if (p && p.total && p.bytes) {
+    const f = Math.min(0.99, p.bytes / p.total);
+    wrap.classList.remove('indet'); $('#jcBar').style.width = (f * 100).toFixed(1) + '%';
+    $('#jcCount').innerHTML = `<b>${Math.floor(f * 100)}%</b> · <b>${num(p.count)}</b> files · <b>${fmt(p.bytes)}</b> of about ${fmt(p.total)} used`;
+  } else {
+    wrap.classList.add('indet'); $('#jcBar').style.width = '';
+    $('#jcCount').innerHTML = p && p.count ? `<b>${num(p.count)}</b> files looked at` : '';
+  }
+  $('#jcStep').textContent = p ? 'Now: ' + p.label : 'Getting started…';
+  $('#jcStep').title = p ? p.label : '';
+}
+$('#cancel').addEventListener('click', () => api('/api/cancel', {}).then(() => { $('#jcStep').textContent = 'Stopping after the current file…'; }).catch((e) => toast(e.message, true)));
+
+// ── log ──
+let logCount = 0;
+function logLines(lines, dropped) {
+  const el = $('#log');
+  const atEnd = el.scrollTop + el.clientHeight >= el.scrollHeight - 20;
+  const frag = document.createDocumentFragment();
+  for (const l of lines) { const s = document.createElement('span'); s.className = l.level; s.textContent = l.line + '\n'; frag.appendChild(s); logCount++; }
+  if (dropped) { const s = document.createElement('span'); s.className = 'debug'; s.textContent = `… ${dropped} more lines (see the log file)\n`; frag.appendChild(s); }
+  el.appendChild(frag);
+  while (logCount > 5000 && el.firstChild) { el.removeChild(el.firstChild); logCount--; }
+  if (atEnd) el.scrollTop = el.scrollHeight;
+}
+$('#clearLog').addEventListener('click', () => { $('#log').textContent = ''; logCount = 0; });
+
+// ── overview ──
+async function loadDrives() {
+  try { renderDrives(await api('/api/drives')); } catch {}
+}
+function renderDrives(drives) {
+  $('#drives').innerHTML = drives.map((d) => {
+    const used = d.total - d.free; const p = d.total ? used / d.total : 0;
+    const col = p >= 0.9 ? 'var(--bad)' : p >= 0.8 ? 'var(--warn)' : 'var(--accent)';
+    const mood = p >= 0.9 ? ' · <span style="color:var(--bad)">nearly full</span>' : p >= 0.8 ? ' · <span style="color:var(--warn)">getting full</span>' : '';
+    return `<div class="drive"><div class="name">${esc(d.drive)}</div>
+      <div class="bar"><div style="width:${(p * 100).toFixed(1)}%;background:${col}"></div></div>
+      <div class="muted">${fmt(used)} used of ${fmt(d.total)} · <b style="color:var(--text)">${fmt(d.free)} free</b>${mood}</div>
+      <div style="margin-top:10px"><button class="btn primary" data-needs-idle data-drive="${esc(d.drive.replace(/\\$/, ''))}">Where did the space go?</button></div></div>`;
+  }).join('');
+  document.querySelectorAll('[data-drive]').forEach((b) => {
+    b.disabled = !!state.job;
+    b.addEventListener('click', () => api('/api/explain', { drive: b.dataset.drive }).catch((e) => toast(e.message, true)));
+  });
+}
+
+/** Folder buckets as a collapsible tree: only children of open rows are rendered. */
+function bucketRows(list, level, parentKey, used) {
+  let html = '';
+  list.forEach((b, i) => {
+    const key = `${parentKey}/${i}`;
+    const kids = (b.children || []).filter((c) => c.bytes > 0);
+    const open = state.openBuckets.has(key);
+    const bar = level === 0 ? `<span class="mini"><div style="width:${pct(b.bytes, used)};background:${COLORS[i % COLORS.length]}"></div></span>` : '';
+    const name = level === 0 ? `<b>${esc(b.label)}</b>` : esc(b.label);
+    html += `<tr class="lvl${level}${level ? ' child' : ''}${kids.length ? ' grp' : ''}" ${kids.length ? `data-toggle="${key}"` : ''}>
+      <td><div class="cell" style="padding-left:${level * 22}px">${kids.length ? caret(open) : noCaret}<div>${bar}${name}${b.hint ? `<div class="muted small">${esc(b.hint)}</div>` : ''}</div></div></td>
+      <td class="num">${fmt(b.bytes)}</td><td class="num muted">${pct(b.bytes, used)}</td>
+      <td>${b.path ? `<button class="link small" data-explore="${esc(b.path)}">explore</button>` : ''}</td></tr>`;
+    if (open) html += bucketRows(kids.slice(0, 12), level + 1, key, used);
+  });
+  return html;
+}
+function allBucketKeys(list, parentKey, out = []) {
+  list.forEach((b, i) => { const key = `${parentKey}/${i}`; const kids = (b.children || []).filter((c) => c.bytes > 0); if (kids.length) { out.push(key); allBucketKeys(kids.slice(0, 12), key, out); } });
+  return out;
+}
+function drawBuckets() {
+  const r = state.explain;
+  const t = $('#bucketTable');
+  t.innerHTML = `<tr><th>Folder</th><th class="num">Size</th><th class="num">Share</th><th></th></tr>${bucketRows(r.buckets, 0, 'b', r.used)}`;
+  bindLinks(t);
+}
+
+function renderExplain() {
+  const r = state.explain; if (!r) return;
+  const hidden = r.hidden.reduce((s, h) => s + h.bytes, 0);
+  const unacc = Math.max(0, r.unaccounted);
+  const segs = [
+    { label: 'Files and folders', bytes: r.allocated, color: 'var(--accent)' },
+    { label: 'Hidden system files', bytes: hidden, color: 'var(--hidden)' },
+    { label: 'Unaccounted', bytes: unacc, color: 'var(--unacc)' },
+  ];
+  const total = Math.max(r.used, segs.reduce((s, x) => s + x.bytes, 0));
+  const top = r.buckets[0];
+  $('#explain').innerHTML = `
+    <div class="card"><h3>${esc(r.drive)} has ${fmt(r.used)} in use. Here's where it went.</h3>
+      <p class="sub">We added up every file we could read, then the system areas that Explorer keeps out of sight. Whatever is left over is "unaccounted".${top ? ` The biggest single chunk is <b>${esc(top.label)}</b> with ${fmt(top.bytes)}.` : ''}</p>
+      <div class="bar stack">${segs.map((s) => `<div title="${esc(s.label)}: ${fmt(s.bytes)}" style="width:${((s.bytes / total) * 100).toFixed(2)}%;background:${s.color}"></div>`).join('')}</div>
+      <div class="legend">${segs.map((s) => `<span style="--sw:${s.color}">${esc(s.label)} <b style="color:var(--text)">${fmt(s.bytes)}</b> (${pct(s.bytes, r.used)})</span>`).join('')}
+        ${r.unaccounted < 0 ? `<span>compression/dedup saves ${fmt(-r.unaccounted)}</span>` : ''}</div>
+      <p class="muted small">${num(r.files)} files in ${(r.ms / 1000).toFixed(0)} s · sizes are what the files take on disk · hard links counted once${r.hardLinkSaved ? ` (Explorer would show ${fmt(r.hardLinkSaved)} more)` : ''}</p>
+      ${r.notes.length ? `<ul class="notes">${r.notes.map((n) => `<li>${esc(n)}</li>`).join('')}</ul>` : ''}
+    </div>
+    <div class="grid2">
+      <div class="card">
+        <div class="card-head"><div><h3>Biggest folders</h3><p class="sub">Top-level folders, biggest first. Click a row to open it up, or <b>explore</b> to see it on the map.</p></div>
+          <div class="actions"><button class="btn small" id="bExpand">Expand all</button><button class="btn small" id="bCollapse">Collapse all</button></div></div>
+        <table id="bucketTable"></table>
+      </div>
+      <div>
+        <div class="card"><h3>Hidden system files</h3><p class="sub">Space Windows uses that no folder view shows you: the page file, shadow copies and the NTFS file table.</p>
+          ${r.hidden.length ? `<table>${r.hidden.map((h) => `<tr><td><b>${esc(h.label)}</b><div class="muted small">${esc(h.hint || '')}</div></td><td class="num">${fmt(h.bytes)}</td></tr>`).join('')}</table>` : `<p class="muted">${r.admin ? 'None found.' : 'Shadow copies and the file table size need admin rights.'}</p>`}</div>
+        <div class="card"><h3>Unaccounted: ${fmt(unacc)}</h3>
+          <p class="sub">Used space we couldn't tie to any file. Most of the time it's folders this account isn't allowed to look inside. Sometimes it's files deleted while a program still had them open, or the deduplication store.</p>
+          ${r.unreadable.count ? `<details><summary>${num(r.unreadable.count)} folders we couldn't read</summary><table>${r.unreadable.samples.map((s) => `<tr><td class="path">${esc(s)}</td></tr>`).join('')}</table></details>` : ''}
+          ${r.admin ? '<p class="muted small">Still big? Run <code>disk-janitor explain ' + esc(r.drive.replace(/\\$/, '')) + ' --as-system</code>. SYSTEM can read folders that are closed even to administrators.</p>' : ''}
+        </div>
+        <div class="card"><h3>Biggest single files</h3><p class="sub">The heavyweights on this drive. <b>show</b> opens Explorer with the file selected.</p>
+          <table>${r.largestFiles.slice(0, 12).map((f) => `<tr><td class="num">${fmt(f.bytes)}</td><td class="path">${esc(f.path)}<div class="muted small">${date(f.mtime)}</div></td><td><button class="link small" data-open="${esc(f.path)}">show</button></td></tr>`).join('')}</table></div>
+      </div>
+    </div>`;
+  drawBuckets();
+  $('#bucketTable').addEventListener('click', (e) => {
+    if (e.target.closest('[data-explore]')) return;
+    const tr = e.target.closest('[data-toggle]'); if (!tr) return;
+    const k = tr.dataset.toggle;
+    if (state.openBuckets.has(k)) { for (const x of [...state.openBuckets]) if (x === k || x.startsWith(k + '/')) state.openBuckets.delete(x); } else state.openBuckets.add(k);
+    drawBuckets();
+  });
+  $('#bExpand').addEventListener('click', () => { state.openBuckets = new Set(allBucketKeys(r.buckets, 'b')); drawBuckets(); });
+  $('#bCollapse').addEventListener('click', () => { state.openBuckets = new Set(); drawBuckets(); });
+  bindLinks($('#explain'));
+}
+
+function bindLinks(root) {
+  root.querySelectorAll('[data-explore]').forEach((b) => { if (b.dataset.bound) return; b.dataset.bound = 1; b.addEventListener('click', () => { showTab('explore'); loadTree(b.dataset.explore); }); });
+  root.querySelectorAll('[data-open]').forEach((b) => { if (b.dataset.bound) return; b.dataset.bound = 1; b.addEventListener('click', () => api('/api/open', { path: b.dataset.open }).catch((e) => toast(e.message, true))); });
+}
+
+// ── explore ──
+async function loadTree(p) {
+  if (!state.explainId) return;
+  try {
+    const t = await api(`/api/tree/${state.explainId}` + (p ? `?path=${encodeURIComponent(p)}` : ''));
+    state.tree = t; state.treePath = t.node.path; renderTree();
+  } catch (e) { toast(e.message, true); }
+}
+function squarify(items, x, y, w, h) {
+  const out = []; const total = items.reduce((s, i) => s + i.value, 0); if (!total) return out;
+  const scale = (w * h) / total; let rest = items.map((i) => ({ ...i, area: i.value * scale }));
+  while (rest.length) {
+    const short = Math.min(w, h); let row = []; let worst = Infinity;
+    for (const it of rest) {
+      const cand = [...row, it]; const s = cand.reduce((a, b) => a + b.area, 0);
+      const mx = Math.max(...cand.map((c) => c.area)), mn = Math.min(...cand.map((c) => c.area));
+      const wr = Math.max((short * short * mx) / (s * s), (s * s) / (short * short * mn));
+      if (wr > worst) break; worst = wr; row = cand;
+    }
+    const s = row.reduce((a, b) => a + b.area, 0); const thick = s / short; let off = 0;
+    for (const it of row) {
+      const len = it.area / thick;
+      out.push(w >= h ? { ...it, x, y: y + off, w: thick, h: len } : { ...it, x: x + off, y, w: len, h: thick });
+      off += len;
+    }
+    if (w >= h) { x += thick; w -= thick; } else { y += thick; h -= thick; }
+    rest = rest.slice(row.length);
+  }
+  return out;
+}
+function renderTree() {
+  const t = state.tree; const n = t.node;
+  // breadcrumbs
+  const rel = n.path.slice(t.root.length).split('\\').filter(Boolean);
+  let acc = t.root; const crumbs = [`<button data-go="${esc(t.root)}">${esc(t.root)}</button>`];
+  for (const seg of rel) { acc = acc.replace(/\\$/, '') + '\\' + seg; crumbs.push(`<span class="muted">›</span><button data-go="${esc(acc)}">${esc(seg)}</button>`); }
+  crumbs.push(`<span class="muted" style="margin-left:8px">${fmt(n.bytes)} · ${num(n.files)} files</span>`);
+  crumbs.push(`<button data-open="${esc(n.path)}" style="margin-left:8px">open in Explorer</button>`);
+  $('#crumbs').innerHTML = crumbs.join(' ');
+  $('#crumbs').querySelectorAll('[data-go]').forEach((b) => b.addEventListener('click', () => loadTree(b.dataset.go)));
+  bindLinks($('#crumbs'));
+  // treemap
+  const tm = $('#treemap'); const W = tm.clientWidth || 800, H = tm.clientHeight || 420;
+  const items = (n.children || []).filter((c) => c.bytes > 0).map((c, i) => ({ value: c.bytes, c, color: COLORS[i % COLORS.length] }));
+  if (n.ownBytes > 0) items.push({ value: n.ownBytes, files: true });
+  items.sort((a, b) => b.value - a.value);
+  const rects = squarify(items, 0, 0, W, H);
+  tm.innerHTML = rects.length ? rects.map((r) => {
+    const label = r.files ? '(files right here)' : r.c.name;
+    const cls = r.files ? 'tile files' : r.c.unreadable ? 'tile unread' : 'tile';
+    const show = r.w > 50 && r.h > 28;
+    return `<div class="${cls}" style="left:${r.x}px;top:${r.y}px;width:${r.w}px;height:${r.h}px;background:${r.color || ''}" ${r.files || !r.c.hasChildren ? '' : `data-go="${esc(r.c.path)}"`} title="${esc(label)} — ${fmt(r.value)}">${show ? `<b>${esc(label)}</b>${fmt(r.value)}` : ''}</div>`;
+  }).join('') : '<div class="empty">This folder is empty.</div>';
+  tm.querySelectorAll('[data-go]').forEach((d) => d.addEventListener('click', () => loadTree(d.dataset.go)));
+  renderDirs();
+  // files
+  $('#files').innerHTML = t.files.length ? `<tr><th></th><th class="num">Size</th><th>File</th></tr>` + t.files.map((f) =>
+    `<tr><td><input type="checkbox" data-fid="${f.id}" data-bytes="${f.bytes}"></td><td class="num">${fmt(f.bytes)}</td><td class="path">${esc(f.path.slice(n.path.length).replace(/^\\/, '') || f.path)}<div class="muted small">${date(f.mtime)} · <button class="link small" data-open="${esc(f.path)}">show</button></div></td></tr>`).join('')
+    : '<tr><td class="muted">None of the 200 biggest files on this drive are in here.</td></tr>';
+  bindLinks($('#files'));
+  $('#files').querySelectorAll('[data-fid]').forEach((c) => c.addEventListener('change', () => { $('#delFiles').disabled = !$('#files').querySelector('[data-fid]:checked'); }));
+  $('#delFiles').disabled = true;
+}
+
+/** Folder list with inline expand: children of opened folders are fetched once and kept. */
+function dirRows(kids, level, viewBytes) {
+  return kids.filter((c) => c.bytes > 0 || c.unreadable).map((c) => {
+    const open = state.dirOpen.has(c.path);
+    let h = `<tr class="lvl${Math.min(level, 3)}${level ? ' child' : ''}">
+      <td><div class="cell" style="padding-left:${level * 20}px">${c.hasChildren ? caret(open, `data-dexp="${esc(c.path)}"`) : noCaret}<div>${c.hasChildren ? `<button class="link" data-go="${esc(c.path)}">${esc(c.name)}</button>` : esc(c.name)}${c.unreadable ? ' <span class="pill caution">can\'t read</span>' : ''}</div></div></td>
+      <td class="num">${c.unreadable && !c.bytes ? '<span class="muted" title="this account is not allowed to look inside">?</span>' : `<span class="mini"><div style="width:${pct(c.bytes, viewBytes)}"></div></span>${fmt(c.bytes)}`}</td><td class="num muted">${num(c.files)}</td><td class="muted small nowrap">${date(c.newest)}</td></tr>`;
+    if (open) {
+      const sub = state.dirKids.get(c.path);
+      const pad = `style="padding-left:${(level + 1) * 20 + 30}px"`;
+      if (!sub) h += `<tr class="child"><td colspan="4" class="muted small" ${pad}>loading…</td></tr>`;
+      else {
+        h += dirRows(sub.children, level + 1, viewBytes);
+        if (sub.more) h += `<tr class="child"><td colspan="4" class="muted small" ${pad}>… and ${sub.more} smaller folders</td></tr>`;
+        if (!sub.children.length) h += `<tr class="child"><td colspan="4" class="muted small" ${pad}>Only files in here.</td></tr>`;
+      }
+    }
+    return h;
+  }).join('');
+}
+function renderDirs() {
+  const n = state.tree.node;
+  $('#dirs').innerHTML = `<tr><th>Folder</th><th class="num">Size</th><th class="num">Files</th><th>Last change</th></tr>` + dirRows(n.children || [], 0, n.bytes) +
+    (n.moreChildren ? `<tr><td colspan="4" class="muted">… and ${n.moreChildren} smaller folders</td></tr>` : '') +
+    (n.children && n.children.length === 0 && n.files ? `<tr><td colspan="4" class="muted">We didn't index any deeper than this. Open it in Explorer to look further.</td></tr>` : '');
+  $('#dirs').querySelectorAll('[data-go]').forEach((b) => b.addEventListener('click', () => loadTree(b.dataset.go)));
+  $('#dirs').querySelectorAll('[data-dexp]').forEach((b) => b.addEventListener('click', () => toggleDir(b.dataset.dexp)));
+}
+async function toggleDir(p) {
+  if (state.dirOpen.has(p)) { for (const x of [...state.dirOpen]) if (x === p || x.startsWith(p + '\\')) state.dirOpen.delete(x); renderDirs(); return; }
+  state.dirOpen.add(p);
+  renderDirs();
+  if (state.dirKids.has(p)) return;
+  try {
+    const t = await api(`/api/tree/${state.explainId}?path=${encodeURIComponent(p)}`);
+    state.dirKids.set(p, { children: t.node.children || [], more: t.node.moreChildren });
+  } catch (e) { state.dirOpen.delete(p); toast(e.message, true); }
+  if (state.tree) renderDirs();
+}
+$('#dirsCollapse').addEventListener('click', () => { state.dirOpen = new Set(); if (state.tree) renderDirs(); });
+window.addEventListener('resize', () => { if (state.tree) renderTree(); });
+
+function confirmDialog(title, html, yes = 'Delete') {
+  return new Promise((resolve) => {
+    const d = $('#confirm'); $('#cTitle').textContent = title; $('#cBody').innerHTML = html; $('#cYes').textContent = yes;
+    const done = (v) => { d.close(); $('#cYes').onclick = $('#cNo').onclick = null; resolve(v); };
+    $('#cYes').onclick = () => done(true); $('#cNo').onclick = () => done(false); d.onclose = () => resolve(false);
+    d.showModal();
+  });
+}
+$('#delFiles').addEventListener('click', async () => {
+  const boxes = [...$('#files').querySelectorAll('[data-fid]:checked')];
+  const bytes = boxes.reduce((s, b) => s + Number(b.dataset.bytes), 0);
+  const list = boxes.map((b) => b.closest('tr').querySelector('.path').firstChild.textContent);
+  if (!(await confirmDialog(`Delete ${boxes.length} file(s), ${fmt(bytes)}?`, `<p>These are deleted for good. They don't go to the recycle bin:</p><ul class="notes">${list.slice(0, 10).map((l) => `<li>${esc(l)}</li>`).join('')}</ul>`))) return;
+  try {
+    const r = await api('/api/files/delete', { explainId: state.explainId, fileIds: boxes.map((b) => Number(b.dataset.fid)) });
+    const failed = r.results.filter((x) => !x.ok);
+    if (failed.length) toast(failed.map((f) => `${f.path}: ${f.reason}`).join('\n'), true);
+    loadTree(state.treePath); loadDrives();
+  } catch (e) { toast(e.message, true); }
+});
+
+// ── apps ──
+function renderApps() {
+  const a = state.explain && state.explain.apps;
+  if (!a) { $('#appsBody').innerHTML = '<div class="card empty"><h3>Only for the system drive</h3>The apps comparison is made when you analyze the drive Windows is installed on.</div>'; return; }
+  const label = (f) => f.match === 'none' ? '<span class="pill moderate">no installed app</span>' : f.match === 'system' ? '<span class="pill info">Windows / shared</span>' : esc(f.apps.map((x) => x.name).join(', '));
+  $('#appsBody').innerHTML = `
+    <div class="card"><h3>The short version</h3>
+      <p class="sub">What Settings adds up, what the folders really take, and how much of it belongs to nothing that's installed.</p>
+      <div class="stats">
+        <div><div class="big">${fmt(a.registryBytes)}</div><div class="muted">what the app list in Settings adds up to (${a.visibleApps} apps, ${a.appsWithoutSize} don't report a size)</div></div>
+        <div><div class="big">${fmt(a.measuredBytes)}</div><div class="muted">what the program folders and installer caches really take</div></div>
+        <div><div class="big" style="color:var(--warn)">${fmt(a.leftoverBytes)}</div><div class="muted">in folders that match no installed app</div></div>
+      </div>
+      <ul class="notes">${a.notes.map((n) => `<li>${esc(n)}</li>`).join('')}</ul>
+    </div>
+    <div class="card"><h3>Installer caches</h3>
+      <p class="sub">Setup files Windows keeps so apps can be repaired, patched or uninstalled later. They don't belong to any app row, so Settings never shows them.</p>
+      <table>${a.caches.map((x) => `<tr><td><b>${esc(x.label)}</b><div class="muted small">${esc(x.hint || '')}</div></td><td class="num">${fmt(x.bytes)}</td><td>${x.path ? `<button class="link small" data-open="${esc(x.path)}">show</button>` : ''}</td></tr>`).join('')}</table></div>
+    <div class="card">
+      <div class="card-head"><div><h3>Program folders</h3>
+        <p class="sub">Every folder in Program Files, ProgramData and the per-user app folders, grouped by where it lives and matched to an installed app. "No installed app" usually means leftovers from something that was uninstalled. Worth a look, but disk-janitor never deletes these for you.</p></div>
+        <div class="actions"><label class="small"><input type="checkbox" id="onlyLeft"> only folders with no installed app</label><button class="btn small" id="aExpand">Expand all</button><button class="btn small" id="aCollapse">Collapse all</button></div></div>
+      <table id="appTable"></table></div>`;
+  const parentOf = (p) => p.slice(0, p.lastIndexOf('\\')) || p;
+  const groups = [];
+  const byParent = new Map();
+  for (const f of a.folders) {
+    const k = parentOf(f.path);
+    let g = byParent.get(k);
+    if (!g) { g = { path: k, bytes: 0, left: 0, leftBytes: 0, folders: [] }; byParent.set(k, g); groups.push(g); }
+    g.folders.push(f); g.bytes += f.bytes;
+    if (f.match === 'none') { g.left++; g.leftBytes += f.bytes; }
+  }
+  groups.sort((x, y) => y.bytes - x.bytes);
+  const draw = () => {
+    const only = $('#onlyLeft').checked;
+    let html = `<tr><th>Folder</th><th class="num">Size</th><th>Installed app</th><th class="num">Size it reports</th><th>Last change</th></tr>`;
+    for (const g of groups) {
+      const fs = g.folders.filter((f) => !only || f.match === 'none');
+      if (!fs.length) continue;
+      const open = state.appOpen.has(g.path);
+      html += `<tr class="grp lvl0" data-agrp="${esc(g.path)}"><td><div class="cell">${caret(open)}<div><b class="path" style="font-family:var(--mono);font-size:12px">${esc(g.path)}</b>
+        <div class="muted small">${fs.length} folder(s)${g.left ? ` · <span style="color:var(--warn)">${g.left} with no installed app (${fmt(g.leftBytes)})</span>` : ''}</div></div></div></td>
+        <td class="num"><b>${fmt(only ? g.leftBytes : g.bytes)}</b></td><td colspan="3"></td></tr>`;
+      if (open) html += fs.slice(0, 300).map((f) => `<tr class="lvl1 child"><td class="path"><div class="cell" style="padding-left:22px">${noCaret}<div><button class="link" data-explore="${esc(f.path)}">${esc(f.path.slice(g.path.length).replace(/^\\/, ''))}</button></div></div></td><td class="num">${fmt(f.bytes)}</td><td>${label(f)}</td><td class="num muted">${f.apps[0] && f.apps[0].estimatedBytes ? fmt(f.apps[0].estimatedBytes) : ''}</td><td class="muted small nowrap">${date(f.newest)}</td></tr>`).join('');
+    }
+    $('#appTable').innerHTML = html;
+    bindLinks($('#appTable'));
+  };
+  $('#appTable').addEventListener('click', (e) => {
+    if (e.target.closest('[data-explore]')) return;
+    const tr = e.target.closest('[data-agrp]'); if (!tr) return;
+    const k = tr.dataset.agrp;
+    state.appOpen.has(k) ? state.appOpen.delete(k) : state.appOpen.add(k);
+    draw();
+  });
+  // Filtering for leftovers opens every group, so they're visible straight away.
+  $('#onlyLeft').addEventListener('change', () => { if ($('#onlyLeft').checked) state.appOpen = new Set(groups.map((g) => g.path)); draw(); });
+  $('#aExpand').addEventListener('click', () => { state.appOpen = new Set(groups.map((g) => g.path)); draw(); });
+  $('#aCollapse').addEventListener('click', () => { state.appOpen = new Set(); draw(); });
+  draw(); bindLinks($('#appsBody'));
+}
+
+// ── clean ──
+$('#scanBtn').addEventListener('click', () => api('/api/scan', { deep: $('#deep').checked }).then(() => { $('#scanBody').className = 'empty'; $('#scanBody').innerHTML = '<span class="spin"></span> Scanning… the results show up here when it\'s done.'; }).catch((e) => toast(e.message, true)));
+function renderScan() {
+  const s = state.scan; const info = state.info; const meta = new Map(info.categories.map((c) => [c.id, c]));
+  const total = s.categories.filter((c) => !c.reportOnly).reduce((a, c) => a + c.bytes, 0);
+  $('#scanBody').className = '';
+  $('#scanBody').innerHTML = `<p style="margin:0 0 4px"><span class="big" style="color:var(--ok)">${fmt(total)}</span> <span class="muted">could be freed</span></p>
+    <p class="muted small" style="margin:0 0 10px">Tick what you want gone, then try <b>Dry run</b> first if you're unsure. Rows marked <span class="pill info">info</span> are just for your information and aren't counted.</p>
+    <div class="risk-legend"><span><span class="pill safe">safe</span> rebuilt automatically, fine to delete</span><span><span class="pill moderate">moderate</span> read the notes first</span><span><span class="pill caution">caution</span> only if you know why</span></div>
+    <table><tr><th></th><th>Category</th><th class="num">Size</th><th class="num">Files</th><th>Risk</th></tr>${s.categories.map((c) => {
+      const m = meta.get(c.id) || {}; const can = !c.reportOnly && (c.bytes > 0 || c.items.length > 0) && (info.admin || !m.needsAdmin);
+      const risk = c.reportOnly ? '<span class="pill info">info</span>' : `<span class="pill ${c.risk}">${c.risk}</span>`;
+      const why = !info.admin && m.needsAdmin && !c.reportOnly ? ' <span class="pill caution">needs admin</span>' : '';
+      const items = c.items.slice(0, 15).map((i) => `<tr><td class="num">${fmt(i.bytes)}</td><td class="path">${esc(i.path)}${i.detail ? `<div class="muted small">${esc(i.detail)}</div>` : ''}</td></tr>`).join('');
+      return `<tr><td>${can ? `<input type="checkbox" data-cat="${esc(c.id)}" data-risk="${c.risk}" data-explicit="${m.explicitOnly ? 1 : 0}" data-bytes="${c.bytes}">` : ''}</td>
+        <td><b>${esc(c.title)}</b> <span class="muted small">${esc(c.id)}</span>${why}<div class="muted small">${esc(m.description || '')}</div>
+        ${c.notes.length ? `<ul class="notes">${c.notes.map((n) => `<li>${esc(n)}</li>`).join('')}</ul>` : ''}
+        ${c.items.length ? `<details><summary class="small">show ${c.items.length} item(s)</summary><table>${items}</table>${c.items.length > 15 ? `<div class="muted small">… and ${c.items.length - 15} more</div>` : ''}</details>` : ''}</td>
+        <td class="num">${c.bytes ? fmt(c.bytes) : '—'}</td><td class="num muted">${c.files ? num(c.files) : ''}</td><td>${risk}</td></tr>`;
+    }).join('')}</table>`;
+  $('#scanBody').querySelectorAll('[data-cat]').forEach((b) => b.addEventListener('change', updateCleanButtons));
+  $('#selSafe').disabled = false; updateCleanButtons();
+}
+const selectedCats = () => [...document.querySelectorAll('[data-cat]:checked')];
+function updateCleanButtons() {
+  const n = selectedCats().length; const busy = !!state.job;
+  $('#dryBtn').disabled = busy || !n || !state.scanId; $('#cleanBtn').disabled = busy || !n || !state.scanId;
+  $('#cleanBtn').textContent = n ? `Clean ${n} selected…` : 'Clean selected…';
+}
+$('#selSafe').addEventListener('click', () => { document.querySelectorAll('[data-cat]').forEach((b) => (b.checked = b.dataset.risk === 'safe' && b.dataset.explicit !== '1')); updateCleanButtons(); });
+async function runClean(dryRun) {
+  const sel = selectedCats(); const ids = sel.map((b) => b.dataset.cat);
+  const bytes = sel.reduce((s, b) => s + Number(b.dataset.bytes), 0);
+  if (!dryRun) {
+    const risky = sel.filter((b) => b.dataset.risk !== 'safe').map((b) => b.dataset.cat);
+    const ok = await confirmDialog(`Delete about ${fmt(bytes)}?`, `<p>Categories: <b>${ids.map(esc).join(', ')}</b></p>${risky.length ? `<p style="color:var(--warn)">Not marked safe: ${risky.map(esc).join(', ')}. Have a look at their notes first.</p>` : ''}<p class="muted">Files that are in use are skipped. Every deleted file is written to the log under %ProgramData%\\disk-janitor\\logs.</p>`, 'Clean');
+    if (!ok) return;
+  }
+  try { await api('/api/clean', { scanId: state.scanId, ids, dryRun }); } catch (e) { toast(e.message, true); }
+}
+$('#dryBtn').addEventListener('click', () => runClean(true));
+$('#cleanBtn').addEventListener('click', () => runClean(false));
+function renderCleanResult(d) {
+  const freed = d.rows.reduce((s, r) => s + r.freed, 0);
+  const gained = d.after.map((a) => { const b = d.before.find((x) => x.drive === a.drive); return b && a.free - b.free > 0 ? `${a.drive} +${fmt(a.free - b.free)}` : ''; }).filter(Boolean).join(', ');
+  $('#resultCard').hidden = false;
+  $('#resultTitle').textContent = d.dryRun ? `Dry run: this would free ${fmt(freed)}` : `Done! Freed ${fmt(freed)}`;
+  $('#resultSub').textContent = d.dryRun ? 'Nothing was deleted. The Log tab lists every file that would go. Happy with it? Hit Clean selected.' : 'Scan again to see what is left.';
+  $('#resultBody').innerHTML = `<table><tr><th>Category</th><th class="num">${d.dryRun ? 'Would free' : 'Freed'}</th><th class="num">Items</th><th class="num">Failed</th></tr>${d.rows.map((r) =>
+    `<tr><td>${esc(r.id)}${r.error ? ` <span class="pill caution">${esc(r.error)}</span>` : ''}${r.notes.length ? `<ul class="notes">${r.notes.map((n) => `<li>${esc(n)}</li>`).join('')}</ul>` : ''}</td><td class="num">${fmt(r.freed)}</td><td class="num">${num(r.deleted)}</td><td class="num">${r.failed || ''}</td></tr>`).join('')}</table>
+    ${d.skipped.length ? `<p class="muted">Skipped because they need admin rights: ${d.skipped.map(esc).join(', ')}</p>` : ''}
+    ${gained ? `<p>Free space gained: <b>${esc(gained)}</b></p>` : ''}
+    ${d.logFile ? `<p class="muted small">Log file: ${esc(d.logFile)}</p>` : ''}`;
+  if (d.logFile) $('#logFile').textContent = 'Log file: ' + d.logFile;
+  if (!d.dryRun) { state.scanId = null; updateCleanButtons(); }
+  showTab('clean');
+  $('#resultCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+// ── start ──
+(async () => {
+  try {
+    const info = await api('/api/info');
+    state.info = info;
+    $('#host').textContent = `${info.host} · ${info.user}${info.admin ? ' · admin' : ''} · v${info.version}`;
+    $('#elev').hidden = info.admin;
+    renderDrives(info.drives);
+    state.prog = info.progress || null;
+    setJob(info.job || null);
+  } catch (e) { document.body.innerHTML = `<p style="margin:3em">${esc(e.message)}</p>`; return; }
+  connect();
+  try { const t = localStorage.getItem('dj-tab'); if (t) showTab(t); } catch {}
+})();
+</script>
+</body>
+</html>

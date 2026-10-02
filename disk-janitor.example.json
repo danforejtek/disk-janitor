@@ -1,0 +1,18 @@
+{
+  "tempAgeDays": 3,
+  "logAgeDays": 14,
+  "nodeModulesAgeDays": 60,
+  "workAgeDays": 30,
+  "logMaxMb": 100,
+  "logKeepMb": 20,
+  "searchRoots": ["D:\\Apps", "D:\\agent\\_work"],
+  "pnpmStores": [],
+  "nginxRoots": ["D:\\nginx"],
+  "pm2Homes": ["C:\\ProgramData\\pm2\\home"],
+  "agentRoots": [],
+  "quarantine": "E:\\msi-quarantine",
+  "custom": [
+    { "id": "agent-temp", "path": "D:\\agent\\_work\\_temp", "olderThanDays": 2 },
+    { "id": "app-logs", "path": "D:\\Apps\\MyApi\\logs", "olderThanDays": 30, "pattern": "\\.(log|txt|gz)$", "truncateOverMb": 500 }
+  ]
+}

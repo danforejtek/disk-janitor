@@ -1,0 +1,23 @@
+{
+  "name": "disk-janitor",
+  "version": "2.0.0",
+  "description": "Find and delete the junk that piles up on Windows Server — packaged as a single .exe",
+  "private": true,
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node scripts/test.mjs",
+    "bundle": "esbuild src/index.ts --bundle --platform=node --target=node22 --format=cjs --loader:.html=text --outfile=dist/disk-janitor.cjs",
+    "start": "npm run bundle && node dist/disk-janitor.cjs",
+    "build": "npm run typecheck && node scripts/build-sea.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "esbuild": "^0.28.2",
+    "postject": "^1.0.0-alpha.6",
+    "typescript": "^5.9.3"
+  }
+}
